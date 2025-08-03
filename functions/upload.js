@@ -4,6 +4,7 @@ export async function onRequestPost(context) {
     const { request, env } = context;
 
     try {
+
         const clonedRequest = request.clone();
         const formData = await clonedRequest.formData();
 
@@ -20,16 +21,41 @@ export async function onRequestPost(context) {
 
         const telegramFormData = new FormData();
         telegramFormData.append("chat_id", env.TG_Chat_ID);
-        telegramFormData.append("document", uploadFile);
-        const apiEndpoint = 'sendDocument';
 
-        const result = await sendToTelegram(telegramFormData, apiEndpoint, env);
+        // 根据文件类型选择合适的上传方式
+        let apiEndpoint;
+        // if (uploadFile.type.startsWith('image/')) {
+        //     telegramFormData.append("photo", uploadFile);
+        //     apiEndpoint = 'sendPhoto';
+        // } else if (uploadFile.type.startsWith('audio/')) {
+        //     telegramFormData.append("audio", uploadFile);
+        //     apiEndpoint = 'sendAudio';
+        // } else {
+            telegramFormData.append("document", uploadFile);
+            apiEndpoint = 'sendDocument';
+        // }
 
-        if (!result.success) {
-            throw new Error(result.error);
+        const apiUrl = `https://api.telegram.org/bot${env.TG_Bot_Token}/${apiEndpoint}`;
+        console.log('Sending request to:', apiUrl);
+
+        const response = await fetch(
+            apiUrl,
+            {
+                method: "POST",
+                body: telegramFormData
+            }
+        );
+
+        console.log('Response status:', response.status);
+
+        const responseData = await response.json();
+
+        if (!response.ok) {
+            console.error('Error response from Telegram API:', responseData);
+            throw new Error(responseData.description || 'Upload to Telegram failed');
         }
 
-        const fileId = getFileId(result.data);
+        const fileId = getFileId(responseData);
 
         if (!fileId) {
             throw new Error('Failed to get file ID');
@@ -70,36 +96,16 @@ export async function onRequestPost(context) {
 
 function getFileId(response) {
     if (!response.ok || !response.result) return null;
-    return response.result.document?.file_id || null;
-}
 
-async function sendToTelegram(formData, apiEndpoint, env, retryCount = 0) {
-    const MAX_RETRIES = 2;
-    const apiUrl = `https://api.telegram.org/bot${env.TG_Bot_Token}/${apiEndpoint}`;
+    const result = response.result;
+    // if (result.photo) {
+    //     return result.photo.reduce((prev, current) =>
+    //         (prev.file_size > current.file_size) ? prev : current
+    //     ).file_id;
+    // }
+    if (result.document) return result.document.file_id;
+    // if (result.video) return result.video.file_id;
+    // if (result.audio) return result.audio.file_id;
 
-    try {
-        const response = await fetch(apiUrl, { method: "POST", body: formData });
-        const responseData = await response.json();
-
-        if (response.ok) {
-            return { success: true, data: responseData };
-        }
-
-        if (retryCount < MAX_RETRIES) {
-            await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
-            return await sendToTelegram(formData, apiEndpoint, env, retryCount + 1);
-        }
-
-        return {
-            success: false,
-            error: responseData.description || 'Upload to Telegram failed'
-        };
-    } catch (error) {
-        console.error('Network error:', error);
-        if (retryCount < MAX_RETRIES) {
-            await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
-            return await sendToTelegram(formData, apiEndpoint, env, retryCount + 1);
-        }
-        return { success: false, error: 'Network error occurred' };
-    }
+    return null;
 }
